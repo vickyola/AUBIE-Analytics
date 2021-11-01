@@ -16,7 +16,7 @@ library("plotly")
 
 #load data:       #read csv file Version 1! version2 would be better, where is it?
 
-bdata <- read.csv(here("bird_classification_v1","bird_classification_v1.csv"), check.names=TRUE,sep=",")
+bdata <- read.csv(here("data","bird_classification_v1.csv"), check.names=TRUE,sep=",")
 
 ################################################################################
 # Plotting######################################################################
