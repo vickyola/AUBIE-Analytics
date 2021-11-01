@@ -49,21 +49,25 @@ get_menu_list <- function(names){
   return(return_list)
 }
 
+#legendtitle <- list(yref='paper',xref="paper",y=1.05,x=1.1, text="Detections",showarrow=F)
+
+
+
 #Bubbleplot  edge lenght and grassland proportion  with  Detection per Site as size/color 
 #dropdown menu to choose the species
 p <- bdata %>%  dplyr::filter(Rank==1,) %>%
   #dplyr::filter(Common.Name== species,) %>% 
   dplyr::select("Site","Common.Name","permanent_grassland_proportion","edge_length_m","date") %>% 
-  group_by(Site, Common.Name) %>% mutate(numocc = length((Common.Name)) ) %>%
+  group_by(Site, Common.Name) %>% mutate(Detections = length((Common.Name)) ) %>%
   distinct(Common.Name , Site, .keep_all= TRUE) %>%
   plot_ly( type = 'scatter',
            x = ~permanent_grassland_proportion,
            y =~edge_length_m, 
-           text =  ~paste('Site ', Site,':', numocc),
+           text =  ~paste('Site ', Site,':', Detections),
            hoverinfo = 'text',
            mode = "markers",
-           size = ~numocc,
-           color = ~numocc,
+           size = ~Detections,
+           color = ~Detections,
            # sizes = c(1, 24),
            #marker = list( opacity = 0.5,sizemode = 'diameter'),
            #hier
@@ -74,8 +78,8 @@ p <- bdata %>%  dplyr::filter(Rank==1,) %>%
                operation = '=',
                value = unique(bdata$Common.Name)[1]
              )
-           )) %>% plotly::layout(title = "Detection per site" ,xaxis = list(title = 'Permanent grassland proportion (%)'),yaxis = list(title = 'Edge length (m)'),
-                                 updatemenus = get_menu_list(unique(bdata$Common.Name)))
+           )) %>% plotly::layout(title = "Detection per Site" ,xaxis = list(title = 'Permanent grassland proportion (%)'),yaxis = list(title = 'Edge length (m)'),
+                                 updatemenus = get_menu_list(unique(bdata$Common.Name)))#,annotations=legendtitle )
 
 
 ```
