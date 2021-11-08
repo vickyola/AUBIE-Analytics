@@ -1,0 +1,425 @@
+---
+title: "AUBIE - Exploratory data analysis"
+html_document: default
+theme: spacelab
+---
+
+```{r, echo=FALSE,warning=FALSE,message=FALSE}
+
+# Load packages.
+library("here")
+library("dplyr")
+library("leaflet")
+library("leaflet.extras")
+library("leaflegend")
+library("rgdal")
+library("raster")
+library("plotly")
+library("ggridges")
+library("conflicted")
+library("readxl")
+library("rgdal")
+library("tidyverse")
+library("ggplot2")
+library("ggridges")
+library("hrbrthemes")
+library("viridis")
+library("RColorBrewer")
+library("tidytext")
+library("cowplot")
+library("grid")
+
+# Load bird detections data and remove ranks not equal to 1.
+bdataa <- read.csv(here("data","bird_classification_v1.csv"), check.names=TRUE,sep=",") %>%
+         dplyr::filter(Rank==1)
+
+```
+
+# Introduction
+
+Farmland bird species require the edge habitats of forest/wood patches. We will investigate this main habitat by deploying autonomous recording units (ARUs) in fields near woody edges. The central area of a wood patch does not matter to us this, meaning we do not include the forest area as another dimension. We also use the proportion of permanent grassland area within 500m buffer zones and exclude the “long tail” of extreme values (>95%). From here that our main explanatory variables are:
+
+* Proportional area of permanent grassland in % within defined buffer around the features; with cut off at 95 % of maximum value (-999 = features excluded by cut off).
+* Edge length of woody patches (SWF + Forests) in m within defined buffer around the features; with cut off at 95 % of maximum value (-999 = features excluded by cut off).
+
+The previous were also discretized into 7 levels to produce two additional ordinal variables. 
+
+A total of 59 sites were sampled with audiomoth-ARUs for 14 days (dawn chorus). The recordings produced were processed using the [BirdNET](https://birdnet.cornell.edu/) neural network to produce a total of 2,851,110 bird species detections. 
+# Bird detection confidence
+
+It should be noted that [BirdNET](https://birdnet.cornell.edu/) produces detections with a varying level of confidence. For the subsequent exploratory analysis, only the bird detections ranked 1 in [each of] the soft classifications were used. But even these primary detections can have a low confidence value. 
+
+The following plot shows the probability density of the confidence values of each species detections. Next to the name we also show the total amount of detections. The species are ordered from most abundant detection-wise to least.  
+
+```{r, echo=FALSE,warning=FALSE,message=FALSE, out.width="100%",fig.dim = c(10, 24)}
+
+### Density plots of bird detection confidence.
+conf_data <- bdataa
+
+conf_mean <- group_by(conf_data, Common.Name) %>%
+  summarise(meanprop = mean(Confidence),
+            ndet = n()) %>%
+  arrange(-ndet)
+
+conf_mean$Common.Name2 <- paste0(conf_mean$Common.Name,
+                                 rep("  n=", nrow(conf_mean)),
+                                 conf_mean$ndet)
+
+conf_data$Common.Name <- plyr::mapvalues(conf_data$Common.Name,
+                                          from = conf_mean$Common.Name,
+                                          to = conf_mean$Common.Name2)
+
+sps <- conf_mean$Common.Name2
+
+conf_data$Common.Name <- factor(conf_data$Common.Name,
+                                     levels = rev(sps))
+
+ggplot(conf_data,
+       aes(x = Confidence, y = Common.Name, fill = "darkred")) +
+  geom_density_ridges(fill = "dark red", alpha = 0.6) +
+  theme_ridges() + 
+  xlim(0, 1)+
+  theme(
+    legend.position="none",
+    panel.spacing = unit(0.1, "lines"),
+    strip.text.x = element_text(size = 8)) +
+  xlab("Confidence (%)") + 
+  ylab(" ")
+
+
+```
+
+In the original [BirdNET](https://birdnet.cornell.edu/) paper the authors recommend considering primary detections with a confidence score of at least 0.5. This relatively restrictive approach led to results that match human observer performance without accounting for overlapping vocalizations during a busy dawn chorus.
+
+So from there on we will also filter out detections with a confidence smaller than 0.5. This reduces the amount of detections from 2,851,110 to 695,651.
+
+```{r, echo=FALSE,warning=FALSE,message=FALSE}
+
+bdata <- dplyr::filter(bdataa, Confidence >= 0.5)
+
+```
+
+
+# Sampling sites map and some first indicators
+
+Based on the previous data we quantified the number of total number of bird detections per site and from here the estimated bird species richness. There does not seem to be any spatial clustering of any of the previous variables, not that it was expected. 
+
+The sites are presented in their true size (500m radius).
+ 
+
+```{r, echo=FALSE,warning=FALSE,message=FALSE, out.width="100%"}
+
+## Map of number of detections and sp. richness per site.
+
+### Calculate the spatial indicators.
+#### Bird detections by site.
+ndet_site <- bdata %>%  
+  group_by(Site) %>%
+  summarise(counts = n(), latitude = mean(latitude), longitude = mean(longitude))
+
+#### Bird species richness by site.
+rich_site <- distinct_at(bdata, vars(Site, Common.Name), .keep_all=TRUE) %>%
+  group_by(Site) %>%
+  summarise(counts = n(), latitude = mean(latitude), longitude = mean(longitude))
+
+### Map of detections and richness per site (to spatial objects).
+coordinates(ndet_site) <- ~ longitude+latitude
+projection(ndet_site) <- "+init=epsg:4326"
+coordinates(rich_site) <- ~ longitude+latitude
+projection(rich_site) <- "+init=epsg:4326"
+
+### Create color palettes.
+n = 5
+pal_det <- colorQuantile(palette = c("white", "gray", "red"), domain = ndet_site$counts,
+                         n = n)
+pal_rch <- colorQuantile(palette = c("white", "gray", "red"), domain = rich_site$counts,
+                         n = n)
+### Create leaflet map.
+m <- leaflet(ndet_site) %>%
+  
+  addCircles(
+    radius = 500,
+    weight = 0.9,
+    opacity = 1,
+    fillOpacity = 0.6,
+    color = "black",
+    stroke = TRUE,
+    fillColor = ~pal_det(ndet_site$counts),
+    group = "Detections")%>%
+  addLegendQuantile(
+    pal = pal_det,
+    values = ndet_site$counts,
+    position = 'topright',
+    numberFormat = function(x) {prettyNum(x, big.mark = ',',
+                                          scientific = FALSE, digits = 2)},
+    shape = 'circle',
+    group = "Detections")%>%
+  
+  addCircles(
+    radius = 500,
+    weight = 0.9,
+    opacity = 1,
+    fillOpacity = 0.6,
+    color = "black",
+    stroke = TRUE,
+    fillColor = ~pal_rch(rich_site$counts),
+    group = "Richness")%>%
+  addLegendQuantile(
+    pal = pal_rch,
+    values = rich_site$counts,
+    position = 'topright',
+    numberFormat = function(x) {prettyNum(x, big.mark = ',',
+                                          scientific = FALSE, digits = 2)},
+    shape = 'circle',
+    group = "Richness")%>%
+  
+  addProviderTiles('Esri.WorldImagery') %>%
+  addFullscreenControl() %>%
+  addLayersControl(position="topleft",
+                   overlayGroups = c("Detections", "Richness"),
+                   options = layersControlOptions(collapsed = FALSE)
+  )%>%
+  hideGroup("Richness") %>%
+  addResetMapButton()
+
+m
+
+```
+
+We can also map the total number of detections and richness per site on the plane defined by our two explanatory variables, grassland proportion and edge length.  
+
+```{r, echo=FALSE,warning=FALSE,message=FALSE, out.width="100%"}
+
+
+## Bubble plot of number of detections per site on the (edge length, grassland proportion) plane.
+ndet_site <- bdata %>%  
+  group_by(Site) %>%
+  summarise(Detections = n(), 
+            permanent_grassland_proportion = mean(permanent_grassland_proportion), 
+            edge_length_m = mean(edge_length_m))
+
+markSize <- function(arr, size = 1){
+  size <- 2. * max(arr) / (size ** 2)
+  return(size)
+}
+
+### Detections
+fig <- plot_ly(ndet_site, 
+               x = ~permanent_grassland_proportion, 
+               y = ~edge_length_m, 
+               type = 'scatter',
+               mode = 'markers', 
+               color = ~Detections,
+               colors = 'Reds',
+               text = ~Detections,
+               marker = list(symbol = 'circle',
+                             size = ~Detections, 
+                             sizemode = 'diameter',
+                             opacity = 0.8,
+                             sizeref = markSize(ndet_site$Detections, size=7)))
+
+fig <- fig %>% plotly::layout(title = 'Detections per site',
+                              xaxis = list(title = "Permanent grassland proportion (%)", showgrid = TRUE),
+                              yaxis = list(title = "Edge length (m)", showgrid = TRUE))
+
+fig
+
+### Bubble plot of species richness per site on the (edge length, grassland proportion) plane.
+rich_site <- distinct_at(bdata, vars(Site, Common.Name), .keep_all=TRUE) %>%
+  group_by(Site) %>%
+  summarise(Richness = n(), latitude = mean(latitude), 
+            permanent_grassland_proportion = mean(permanent_grassland_proportion), 
+            edge_length_m = mean(edge_length_m))
+
+fig <- plot_ly(rich_site, 
+               x = ~permanent_grassland_proportion, 
+               y = ~edge_length_m, 
+               type = 'scatter',
+               mode = 'markers', 
+               color = ~Richness,
+               colors = 'Reds',
+               text = ~Richness,
+               marker = list(symbol = 'circle',
+                             size = ~Richness, 
+                             sizemode = 'diameter',
+                             opacity = 0.8,
+                             sizeref = markSize(rich_site$Richness, size = 7)))
+
+fig <- fig %>% plotly::layout(title = 'Species richness per site',
+                              xaxis = list(title = "Permanent grassland proportion (%)", showgrid = TRUE),
+                              yaxis = list(title = "Edge length (m)", showgrid = TRUE))
+
+fig
+
+```
+
+## Number of bird species detections 
+
+We now present some more detections per species bubble plots. A larger and darker bubble indicate more detections. The y-axis (species) is ordered from the most active species (Willow Warbler - Top) to the least active (Eurasian coot - Bottom).
+
+The following plot shows the number of detections per species per site.
+
+```{r, echo=FALSE,warning=FALSE,message=FALSE, out.width="100%",fig.dim = c(10, 24)}
+
+## Bubble plot of number of detections per site per species. 
+ndet_site_sp <- bdata %>%
+  dplyr::select("Site","Common.Name","permanent_grassland_proportion_class","edge_length_class","date")%>% 
+  group_by(Site, Common.Name) %>% mutate(numocc = length((Common.Name)) ) %>%
+  distinct(Common.Name , Site, .keep_all= TRUE) 
+  
+ggplot(data=ndet_site_sp,aes(x = Site, y=reorder_within(x = Common.Name, by = numocc, within=Common.Name, FUN =sum )))+
+  geom_point(alpha = 0.5,aes(size = numocc,color=numocc ) )+ 
+  scale_color_continuous(type = "viridis",direction = -1)+ 
+  scale_size(range = c(1, 24))+
+  scale_y_reordered()+
+  labs(x ="Site", y= "", size = "Number of detections", col="Number of detections")+
+  theme_minimal()  +
+  theme(axis.text=element_text(size=8),legend.position = "bottom")+
+  guides(color= guide_legend(), size=guide_legend())+
+  ggtitle("Detections per species per site")
+
+
+```
+
+The following plot shows the number of detections per species per grassland proportion class.
+
+```{r, echo=FALSE,warning=FALSE,message=FALSE, out.width="100%",fig.dim = c(10, 24)}
+
+## Bubble plot of mean number of detections in grassland proportion class per species. 
+meandet_grass <- bdata %>%
+  dplyr::select("Site","Common.Name","permanent_grassland_proportion_class")%>% 
+  group_by(Site, Common.Name) %>%
+  mutate(numocc = length((Common.Name)) ) %>%
+  distinct(Common.Name , Site, .keep_all= TRUE) %>% 
+  group_by(Common.Name, permanent_grassland_proportion_class) %>%
+  mutate(avgrass = mean(numocc)) %>%  
+  distinct(Common.Name , permanent_grassland_proportion_class, .keep_all= TRUE)
+
+ggplot(data = meandet_grass, aes(x = permanent_grassland_proportion_class, y=reorder_within(x = Common.Name, by = avgrass, within=Common.Name, FUN =sum ))) +
+  geom_point(alpha = 0.3,aes(size = avgrass,color=avgrass ) )+ 
+  scale_color_continuous(type = "viridis",direction = -1)+ 
+  scale_size(range = c(1, 24))+
+  scale_y_reordered()+       
+  labs(x ="Grassland proportion class", y= "", size = "Number of detections", col="Number of detections")+
+  theme_minimal()  +
+  theme(axis.text=element_text(size=8),legend.position = "bottom")+
+  guides(color= guide_legend(), size=guide_legend())+
+  ggtitle("Detections per grassland proportion class") 
+
+
+
+```
+
+The following plot shows the number of detections per species per edge length class.
+
+```{r, echo=FALSE,warning=FALSE,message=FALSE, out.width="100%",fig.dim = c(10, 24)}
+
+## Overview edge length class - Mean number of detections in edge length class per species.
+meandet_edge <-bdata %>%
+  dplyr::select("Site","Common.Name","edge_length_class","date")%>% 
+  group_by(Site, Common.Name) %>%
+  mutate(numocc = length((Common.Name)) ) %>%
+  distinct(Common.Name , Site, .keep_all= TRUE) %>% 
+  group_by(Common.Name, edge_length_class) %>%
+  mutate(avedge = mean(numocc) ) %>% 
+  distinct(Common.Name , edge_length_class, .keep_all= TRUE)
+
+ggplot(data = meandet_edge, aes(x = edge_length_class, y=reorder_within(x = Common.Name, by = avedge, within=Common.Name, FUN =sum ))) +
+  geom_point(alpha = 0.3,aes(size = avedge,color=avedge ) )+ 
+  scale_color_continuous(type = "viridis",direction = -1)+ 
+  scale_size(range = c(1, 24))+
+  scale_y_reordered()+
+  labs(x ="Edge length class", y= "", size = "Number of detections", col="Number of detections")+
+  theme_minimal()  +
+  theme(axis.text=element_text(size=8),legend.position = "bottom")+
+  guides(color= guide_legend(), size=guide_legend())+
+  ggtitle("Detections per species per edge length class")
+
+```
+
+
+# Distribution of the explanatory variables per species
+
+We created density plots from each of our two explanatory variables of interest for each species. This is presented as a (very large!) stacked ridegline plots. First for grassland proportion and then for edge length. The y-axis is ordered based on the mean of the rescpective variable. So the top most species has the largest grassland proportion/edge-length mean.
+
+## Grassland proportion per species ridgeline plot
+
+```{r, echo=FALSE,warning=FALSE,message=FALSE, out.width="100%",fig.dim = c(10, 24)}
+
+
+### Density plots of grassland proportion per species.
+#gprop_data_site <- distinct_at(bdata, vars(Site), .keep_all=TRUE)
+gprop_data <- bdata
+
+gprop_mean <- group_by(gprop_data, Common.Name) %>%
+  summarise(meanprop = mean(permanent_grassland_proportion),
+            ndet = n()) %>%
+  arrange(-meanprop)
+
+gprop_mean$Common.Name2 <- paste0(gprop_mean$Common.Name,
+                                 rep("  n=", nrow(gprop_mean)),
+                                 gprop_mean$ndet)
+
+gprop_data$Common.Name <- plyr::mapvalues(gprop_data$Common.Name,
+                                          from = gprop_mean$Common.Name,
+                                          to = gprop_mean$Common.Name2)
+
+sps <- gprop_mean$Common.Name2
+
+gprop_data$Common.Name <- factor(gprop_data$Common.Name,
+                                     levels = rev(sps))
+ggplot(gprop_data,
+       aes(x = permanent_grassland_proportion, y = Common.Name, fill = "darkred")) +
+  geom_density_ridges(fill = "dark red", alpha = 0.6) +
+  theme_ridges() + 
+  xlim(0, 50)+
+  theme(
+    legend.position="none",
+    panel.spacing = unit(0.1, "lines"),
+    strip.text.x = element_text(size = 8)) +
+  xlab("Permanent grassland proportion (%)") + 
+  ylab(" ")
+
+
+
+```
+
+
+## Edge length per species ridgeline plot
+
+```{r, echo=FALSE,warning=FALSE,message=FALSE, out.width="100%",fig.dim = c(10, 24)}
+
+### Density plots of edge length per species.
+edge_data <- bdata
+
+edge_mean <- group_by(edge_data, Common.Name) %>%
+  summarise(meanprop = mean(edge_length_m),
+            ndet = n()) %>%
+  arrange(-meanprop)
+
+edge_mean$Common.Name2 <- paste0(edge_mean$Common.Name,
+                                 rep("  n=", nrow(edge_mean)),
+                                 edge_mean$ndet)
+
+edge_data$Common.Name <- plyr::mapvalues(edge_data$Common.Name,
+                                          from = edge_mean$Common.Name,
+                                          to = edge_mean$Common.Name2)
+
+sps <- edge_mean$Common.Name2
+
+edge_data$Common.Name <- factor(edge_data$Common.Name,
+                                     levels = rev(sps))
+ggplot(edge_data,
+       aes(x = edge_length_m, y = Common.Name, )) +
+  geom_density_ridges(fill = "dark green", alpha = 0.7) +
+  theme_ridges() + 
+  xlim(580, 13025)+
+  theme(
+    legend.position="none",
+    panel.spacing = unit(0.1, "lines"),
+    strip.text.x = element_text(size = 8)) +
+  xlab("Edge length (m)") + 
+  ylab(" ")
+
+
+```
